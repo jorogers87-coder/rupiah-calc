@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0f766e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>AUD ⇄ IDR</title>
+<style>
+  :root { --bg:#f4f6f5; --card:#fff; --ink:#111; --muted:#6b7280; --accent:#0f766e; --op:#e6f2f0; --key:#fff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 12px calc(env(safe-area-inset-bottom) + 12px); }
+  header { display:flex; justify-content:space-between; align-items:center; padding:12px 4px 8px; }
+  .toggle { display:flex; background:#e5e7eb; border-radius:999px; padding:3px; }
+  .toggle button { border:0; background:none; padding:8px 16px; border-radius:999px; font-size:15px; font-weight:600; color:var(--muted); }
+  .toggle button.on { background:var(--accent); color:#fff; }
+  .rate { font-size:12px; color:var(--muted); text-align:right; line-height:1.4; }
+  .rate b { color:var(--ink); font-weight:600; }
+  .display { background:var(--card); border-radius:18px; padding:14px 16px; margin-bottom:10px; flex:1; min-height:170px;
+    display:flex; flex-direction:column; justify-content:flex-end; text-align:right; overflow:hidden; }
+  .expr { font-size:20px; color:var(--muted); word-break:break-all; min-height:26px; }
+  .main { font-size:40px; font-weight:700; word-break:break-all; margin-top:4px; }
+  .conv { font-size:24px; color:var(--accent); font-weight:600; margin-top:6px; word-break:break-all; }
+  .cur { font-size:.6em; font-weight:600; margin-left:4px; }
+  .keys { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .keys button { border:0; border-radius:14px; background:var(--key); font-size:24px; font-weight:500; height:62px; color:var(--ink);
+    box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .keys button:active { filter:brightness(.92); }
+  .keys .op { background:var(--op); color:var(--accent); font-weight:700; }
+  .keys .eq { background:var(--accent); color:#fff; font-weight:700; }
+  .keys .fn { color:#b91c1c; }
+  .note { font-size:12px; color:#b45309; text-align:center; margin:-4px 0 8px; min-height:0; }
+  dialog { border:0; border-radius:16px; padding:18px; width:min(90vw,340px); }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  dialog input { width:100%; font-size:20px; padding:10px; border:1px solid #d1d5db; border-radius:10px; margin:10px 0; }
+  dialog .row { display:flex; gap:8px; justify-content:flex-end; }
+  dialog .row button { border:0; border-radius:10px; padding:10px 14px; font-size:15px; font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <div class="toggle" id="toggle">
+    <button data-c="IDR" class="on">IDR</button>
+    <button data-c="AUD">AUD</button>
+  </div>
+  <div class="rate" id="rateBox">Loading rate…</div>
+</header>
+
+<div class="display">
+  <div class="expr" id="expr"></div>
+  <div class="main" id="main">0</div>
+  <div class="conv" id="conv"></div>
+</div>
+<div class="note" id="note"></div>
+
+<div class="keys" id="keys">
+  <button class="fn" data-k="C">C</button>
+  <button class="fn" data-k="back">⌫</button>
+  <button class="op" data-k="÷">÷</button>
+  <button class="op" data-k="×">×</button>
+  <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+  <button class="op" data-k="−">−</button>
+  <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+  <button class="op" data-k="+">+</button>
+  <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+  <button class="eq" data-k="=" style="grid-row:span 2;height:auto">=</button>
+  <button data-k="000">000</button><button data-k="0">0</button><button data-k=".">.</button>
+</div>
+
+<dialog id="rateDlg">
+  <div style="font-weight:600">Set rate manually</div>
+  <div style="font-size:13px;color:#6b7280;margin-top:4px">1 AUD = how many IDR?</div>
+  <input id="rateIn" type="number" inputmode="decimal">
+  <div class="row">
+    <button id="rateCancel" style="background:#e5e7eb">Cancel</button>
+    <button id="rateSave" style="background:#0f766e;color:#fff">Save</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  const OPS = ['+','−','×','÷'];
+  let tokens = [];        // e.g. ['150000','+','85000']
+  let entry = 'IDR';      // currency being typed
+  let rate = null;        // IDR per 1 AUD
+  let rateTime = null;
+  let rateSrc = '';
+  let justEvaluated = false;
+
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch(e){ return null; } },
+    set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  };
+
+  // ---------- rate ----------
+  const saved = store.get('audidr');
+  if (saved && saved.rate) { rate = saved.rate; rateTime = saved.time; rateSrc = saved.src; }
+  const savedEntry = store.get('entry');
+  if (savedEntry === 'AUD' || savedEntry === 'IDR') entry = savedEntry;
+
+  const sources = [
+    ['open.er-api.com', 'https://open.er-api.com/v6/latest/AUD', j => j && j.rates && j.rates.IDR],
+    ['Frankfurter (ECB)', 'https://api.frankfurter.app/latest?from=AUD&to=IDR', j => j && j.rates && j.rates.IDR],
+    ['currency-api', 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/aud.json', j => j && j.aud && j.aud.idr]
+  ];
+
+  async function fetchRate() {
+    for (const [name, url, pick] of sources) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6000);
+        const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+        clearTimeout(t);
+        if (!r.ok) continue;
+        const v = Number(pick(await r.json()));
+        if (v > 1000 && v < 100000) {
+          rate = v; rateTime = Date.now(); rateSrc = name;
+          store.set('audidr', { rate, time: rateTime, src: rateSrc });
+          render(); return;
+        }
+      } catch (e) {}
+    }
+    render(true);
+  }
+
+  // ---------- maths ----------
+  function evaluate(tks) {
+    const t = tks.slice();
+    if (t.length && OPS.includes(t[t.length-1])) t.pop();
+    if (!t.length) return 0;
+    const nums = [Number(t[0])], ops = [];
+    for (let i = 1; i < t.length; i += 2) {
+      const op = t[i], n = Number(t[i+1]);
+      if (op === '×') nums[nums.length-1] *= n;
+      else if (op === '÷') nums[nums.length-1] = n === 0 ? NaN : nums[nums.length-1] / n;
+      else { ops.push(op); nums.push(n); }
+    }
+    let total = nums[0];
+    ops.forEach((op, i) => { total = op === '+' ? total + nums[i+1] : total - nums[i+1]; });
+    return total;
+  }
+
+  // ---------- formatting ----------
+  function fmt(n, cur) {
+    if (!isFinite(n)) return '—';
+    const dp = cur === 'AUD' ? 2 : 0;
+    return n.toLocaleString('en-AU', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  }
+  function fmtToken(s) {
+    if (OPS.includes(s)) return ' ' + s + ' ';
+    const [a, b] = s.split('.');
+    const whole = a === '' ? '0' : Number(a).toLocaleString('en-AU');
+    return b !== undefined ? whole + '.' + b : whole;
+  }
+  function ago(ts) {
+    const m = Math.round((Date.now() - ts) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    const h = Math.round(m / 60);
+    if (h < 48) return h + ' h ago';
+    return new Date(ts).toLocaleDateString('en-AU', { day:'numeric', month:'short' });
+  }
+
+  // ---------- render ----------
+  function render(fetchFailed) {
+    const other = entry === 'IDR' ? 'AUD' : 'IDR';
+    const val = evaluate(tokens);
+    $('expr').textContent = tokens.length > 1 ? tokens.map(fmtToken).join('') : '';
+    $('main').innerHTML = fmt(val, entry) + '<span class="cur">' + entry + '</span>';
+    if (rate) {
+      const c = entry === 'IDR' ? val / rate : val * rate;
+      $('conv').innerHTML = '≈ ' + fmt(c, other) + '<span class="cur">' + other + '</span>';
+      $('rateBox').innerHTML = '1 AUD = <b>' + fmt(rate, 'IDR') + '</b> IDR<br>' + ago(rateTime) + ' · tap to edit';
+    } else {
+      $('conv').textContent = '';
+      $('rateBox').innerHTML = fetchFailed ? '<b>No rate</b><br>tap to set' : 'Loading rate…';
+    }
+    $('note').textContent = (fetchFailed && rate) ? 'Offline — using last saved rate' : '';
+    document.querySelectorAll('#toggle button').forEach(b => b.classList.toggle('on', b.dataset.c === entry));
+  }
+
+  // ---------- input ----------
+  function press(k) {
+    const last = tokens[tokens.length-1];
+    const lastIsNum = last !== undefined && !OPS.includes(last);
+    if (/^\d+$/.test(k)) {
+      if (justEvaluated) { tokens = []; justEvaluated = false; }
+      const lastNow = tokens[tokens.length-1];
+      if (lastNow !== undefined && !OPS.includes(lastNow)) {
+        const nv = (lastNow === '0' ? '' : lastNow) + k;
+        if (nv.replace('.', '').length <= 13) tokens[tokens.length-1] = nv || '0';
+      } else if (k !== '000') tokens.push(k);
+    } else if (k === '.') {
+      if (justEvaluated) { tokens = []; justEvaluated = false; }
+      const l = tokens[tokens.length-1];
+      if (l === undefined || OPS.includes(l)) tokens.push('0.');
+      else if (!l.includes('.')) tokens[tokens.length-1] = l + '.';
+    } else if (OPS.includes(k)) {
+      justEvaluated = false;
+      if (!tokens.length) tokens.push('0');
+      if (lastIsNum) tokens.push(k); else tokens[tokens.length-1] = k;
+    } else if (k === '=') {
+      if (!tokens.length) return;
+      const v = evaluate(tokens);
+      if (!isFinite(v)) { tokens = []; render(); return; }
+      const dp = entry === 'AUD' ? 2 : 0;
+      tokens = [String(Math.round(v * 10**dp) / 10**dp)];
+      justEvaluated = true;
+    } else if (k === 'C') {
+      tokens = []; justEvaluated = false;
+    } else if (k === 'back') {
+      justEvaluated = false;
+      if (!tokens.length) return;
+      const l = tokens[tokens.length-1];
+      if (OPS.includes(l) || l.length <= 1) tokens.pop();
+      else tokens[tokens.length-1] = l.slice(0, -1);
+    }
+    render();
+  }
+
+  $('keys').addEventListener('click', e => { const b = e.target.closest('button'); if (b) press(b.dataset.k); });
+
+  // switch currency: convert the current total across
+  $('toggle').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b || b.dataset.c === entry) return;
+    if (rate && tokens.length) {
+      const v = evaluate(tokens);
+      const c = entry === 'IDR' ? v / rate : v * rate;
+      const dp = b.dataset.c === 'AUD' ? 2 : 0;
+      tokens = [String(Math.round(c * 10**dp) / 10**dp)];
+      justEvaluated = true;
+    }
+    entry = b.dataset.c; store.set('entry', entry); render();
+  });
+
+  // manual rate
+  $('rateBox').addEventListener('click', () => { $('rateIn').value = rate ? Math.round(rate) : ''; $('rateDlg').showModal(); });
+  $('rateCancel').addEventListener('click', () => $('rateDlg').close());
+  $('rateSave').addEventListener('click', () => {
+    const v = Number($('rateIn').value);
+    if (v > 1000 && v < 100000) { rate = v; rateTime = Date.now(); rateSrc = 'manual'; store.set('audidr', { rate, time: rateTime, src: rateSrc }); }
+    $('rateDlg').close(); render();
+  });
+
+  render();
+  fetchRate();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) fetchRate(); });
+})();
+</script>
+</body>
+</html>
